@@ -1,187 +1,79 @@
 # Hardware
 
-Este documento registra os componentes e decisões de hardware do projeto **OpenBSD-NAS**.
+Componentes e decisões de hardware do **OpenBSD-NAS**.
 
-## Raspberry Pi 5
+## Em uso
 
-O Raspberry Pi 5 será utilizado como computador principal do NAS.
-
-### Interfaces utilizadas
-
-- Gigabit Ethernet
-- USB 3.0
-- GPIO de 40 pinos
-- microSD, inicialmente para instalação/boot
+| Componente | Detalhe |
+|---|---|
+| Raspberry Pi 5 | 8 GB de RAM |
+| Sistema | microSD SanDisk 64 GB, slot interno |
+| Case | case oficial do Raspberry Pi 5, sem ventoinha |
+| Fonte | fonte oficial do Raspberry Pi 5 |
+| Rede | Gigabit Ethernet (`cad0`) |
 
 ### Interfaces indisponíveis
 
-O Raspberry Pi utilizado possui danos físicos em:
+O Raspberry Pi 5 utilizado tem danos físicos em:
 
-- **FAN header de 4 pinos**
-- **conector/trava PCIe FFC**
+- **FAN header de 4 pinos** — o cooler da case oficial não funciona;
+- **conector/trava PCIe FFC externo** — sem HATs PCIe/NVMe.
 
-Essas interfaces não fazem parte da arquitetura do projeto.
+USB, Ethernet e o slot do microSD funcionam normalmente. No Pi 5, USB e Ethernet passam pelo chip RP1, ligado por um PCIe **interno**, que não é afetado.
 
----
+### Temperatura
 
-## EDATEC ED-Pi5Case-B
-
-Case passiva de alumínio selecionada para refrigerar o Raspberry Pi 5.
-
-### Motivos da escolha
-
-- construção em alumínio;
-- excelente dissipação térmica;
-- funcionamento fanless;
-- adequada para operação 24/7;
-- não depende do FAN header;
-- acesso ao GPIO através de extensor.
-
-A própria case funcionará como dissipador térmico do Raspberry Pi.
+Em repouso, na case oficial fechada e sem ventoinha: **~63 °C** (`sysctl hw.sensors`). O firmware reduz o clock perto de 85 °C. Ainda falta medir sob carga, com discos e transferências pela rede.
 
 ---
 
-## EDATEC ED-Pi5Case-HA-B
+## Armazenamento — em definição
 
-Kit de extensão utilizado para levar o GPIO de 40 pinos para cima da ED-Pi5Case-B.
+Nenhum hardware de armazenamento foi comprado. Opções avaliadas:
 
-Sua função será permitir a instalação do Radxa Quad SATA HAT acima da case.
+### Opção A — discos USB independentes (preferida para começar)
 
-```text
-Radxa QF4
-    │
-GPIO estendido
-    │
-EDATEC ED-Pi5Case-B
-    │
-Raspberry Pi 5
-```
+- 2× SSD SATA de 2,5" em 2 gabinetes USB 3.0 com ponte **ASMedia** (ASM1153E / ASM235CM);
+- RAID1 por software (softraid) no OpenBSD;
+- alimentados pelo próprio Pi: com a fonte oficial reconhecida, o Pi 5 libera 1,6 A nas portas USB, suficiente para dois SSDs;
+- silencioso, frio, sem fonte extra;
+- custo por TB maior que HDD.
 
----
+### Opção B — gabinete USB multibaias com fonte própria
 
-## Radxa Quad SATA HAT QF4
+- ex.: ORICO WS400C3, com HDDs de 3,5";
+- mais capacidade por custo;
+- mais ruído e consumo; a ponte USB do gabinete é um ponto único de falha.
 
-Controladora responsável pelos discos SATA.
+### Radxa Quad SATA HAT QF4 — rebaixada
 
-### Características relevantes
+Era a controladora planejada originalmente. Riscos encontrados:
 
-- 4 interfaces SATA;
-- conexão de dados através de USB 3.0;
-- não utiliza PCIe;
-- adequada para SSDs/HDDs SATA;
-- alimentação dos discos independente da interface de dados;
-- montagem acima do Raspberry Pi através do GPIO.
+- feita para o **Raspberry Pi 4**; o Pi 5 não aparece como suportado e o produto está descontinuado/arquivado;
+- alimenta o Pi pelos 5 V do GPIO; sem fonte de 5 V/5 A detectada, o Pi 5 limita as portas USB a 600 mA e desativa o boot por USB;
+- usar a fonte do Pi e os 5 V da placa ao mesmo tempo é um risco elétrico;
+- ventoinha, OLED e linhas de reset dependem de um serviço só para Linux;
+- não há relatos de uso em BSD.
 
-### Caminho dos dados
+Só volta a ser considerada se passar no teste abaixo.
 
-```text
-SSD/HDD
-   │
- SATA
-   │
-Radxa QF4
-   │
- USB 3
-   │
-Raspberry Pi 5
-```
+### Teste antes de comprar o restante
 
-O GPIO não transporta os dados SATA. Ele é utilizado para integração física e funções auxiliares da placa.
+1. Comprar **um** gabinete/controladora e **um** disco.
+2. Conectar com o Pi já no OpenBSD e conferir o `dmesg` (`umass` → `sdN`).
+3. Testar escrita sustentada e religamento.
+4. Testar SMART pela ponte USB (`smartctl -d sat`).
+5. Medir a temperatura do Pi sob carga.
+6. Só então comprar o restante.
+
+### Desempenho esperado
+
+O OpenBSD usa discos USB pelo `umass` (sem UAS), com algo entre 40 e 100 MB/s. A rede Gigabit limita a cerca de 110 MB/s, então o gargalo é a rede de qualquer forma.
 
 ---
 
-## Armazenamento
+## Case
 
-O projeto suportará até quatro unidades SATA.
-
-Configuração ainda não definida:
-
-```text
-SATA 1
-SATA 2
-SATA 3
-SATA 4
-```
-
-Serão avaliados:
-
-- SSD SATA de 2,5";
-- HDD SATA de 2,5";
-- HDD SATA de 3,5".
-
-A escolha final levará em conta:
-
-- capacidade;
-- consumo;
-- temperatura;
-- ruído;
-- confiabilidade;
-- custo;
-- alimentação necessária.
-
----
-
-## Alimentação
-
-A alimentação dos discos não deverá depender exclusivamente do Raspberry Pi.
-
-Especialmente caso HDDs mecânicos sejam utilizados, será adotada alimentação capaz de suportar os picos de corrente durante a partida dos discos.
-
-O projeto da fonte será definido após a escolha definitiva dos dispositivos SATA.
-
----
-
-## Refrigeração
-
-### Raspberry Pi
-
-Refrigeração:
-
-**100% passiva**
-
-Responsável:
-
-**EDATEC ED-Pi5Case-B**
-
-### Discos
-
-A necessidade de ventilação será determinada pelo tipo e quantidade de unidades instaladas.
-
-SSDs podem permitir uma construção praticamente fanless.
-
-HDDs de 3,5" poderão exigir fluxo de ar dedicado dentro da case NAS.
-
----
-
-## Case NAS
-
-A estrutura externa será projetada especificamente para este projeto e produzida através de impressão 3D.
-
-Conceito inicial:
-
-```text
-┌────────────────────────┐
-│       SATA Drive       │
-├────────────────────────┤
-│       SATA Drive       │
-├────────────────────────┤
-│       SATA Drive       │
-├────────────────────────┤
-│       SATA Drive       │
-├────────────────────────┤
-│   Radxa Quad SATA QF4  │
-├────────────────────────┤
-│      GPIO Extender     │
-├────────────────────────┤
-│ EDATEC + Raspberry Pi  │
-└────────────────────────┘
-```
-
-O projeto deverá priorizar:
-
-- acesso fácil aos discos;
-- fluxo de ar;
-- organização;
-- manutenção;
-- baixo ruído;
-- dimensões compactas.
+- **EDATEC ED-Pi5Case-B** (case passiva de alumínio) continua sendo uma opção para a refrigeração passiva definitiva.
+- O extensor GPIO **ED-Pi5Case-HA-B** só é necessário com um HAT no GPIO, como a QF4.
+- A case 3D será projetada depois da escolha do armazenamento (ver [case/README.md](../case/README.md)).

@@ -1,235 +1,108 @@
-# Architecture
+# Arquitetura
 
 ## Visão geral
 
-O **OpenBSD-NAS** será um NAS doméstico baseado em Raspberry Pi 5 executando OpenBSD.
+O **OpenBSD-NAS** é um NAS doméstico baseado em Raspberry Pi 5 executando OpenBSD.
 
-A arquitetura foi projetada para não depender de PCIe nem do FAN header do Raspberry Pi.
+A arquitetura não depende do PCIe FFC externo nem do FAN header do Raspberry Pi, que estão danificados.
 
 ```text
-                     Rede local
+                 Rede local (Gigabit)
                          │
-                    Ethernet
-                         │
-                 ┌───────▼───────┐
-                 │ Raspberry Pi 5│
-                 │    OpenBSD    │
-                 └───────┬───────┘
-                         │
-                    2× USB 3.0
-                         │
-                 ┌───────▼───────┐
-                 │ Radxa QF4     │
-                 │ Quad SATA HAT │
-                 └─┬───┬───┬───┬┘
-                   │   │   │   │
-                 SATA SATA SATA SATA
-                   │   │   │   │
-                  D1  D2  D3  D4
+                 ┌───────▼────────┐
+                 │ Raspberry Pi 5 │
+                 │  OpenBSD 8.0   │
+                 │ sistema: µSD   │
+                 └───┬────────┬───┘
+                  USB 3.0  USB 3.0
+                     │        │
+                    D1       D2
+                     └─RAID1──┘
 ```
 
 ## Camadas
 
-### Hardware
+| Camada | Escolha | Estado |
+|---|---|---|
+| Hardware | Raspberry Pi 5 (8 GB) + discos SATA por USB 3.0 | Pi em uso; discos a definir |
+| Sistema | OpenBSD 8.0/arm64 no microSD | ✅ |
+| Administração | OpenSSH, só chave | ✅ |
+| Privilégio | `doas` (grupo `wheel`) | ✅ |
+| Firewall | PF, bloqueio por padrão | ✅ |
+| Armazenamento | FFS2 sobre softraid RAID1 | planejado |
+| Compartilhamento | Samba; NFS opcional | planejado |
+
+## Sistema e dados separados
 
 ```text
-Raspberry Pi 5
-      │
-Radxa Quad SATA HAT QF4
-      │
-4× SATA
+microSD ── OpenBSD (sistema)
+USB/SATA ─ dados (/srv/nas)
 ```
 
-### Sistema operacional
+O sistema permanece no microSD. Os dados ficam em discos dedicados, montados pelo DUID com `noatime,nodev,nosuid`. Uma falha nos discos não impede o boot; uma falha no microSD se resolve gravando a última imagem.
+
+## Administração
 
 ```text
-OpenBSD
+Desktop ──SSH (chave Ed25519)──▶ bsd (OpenBSD)
 ```
 
-### Administração
-
-```text
-OpenSSH
-```
-
-### Rede e segurança
-
-```text
-PF
-OpenSSH
-usuários/grupos
-permissões Unix
-```
-
-### Armazenamento
-
-Inicialmente:
-
-```text
-Discos SATA
-    │
-OpenBSD
-    │
-FFS2
-```
-
-A configuração definitiva dos discos será decidida após testes.
-
-Possibilidades:
-
-- discos independentes;
-- espelhamento;
-- softraid;
-- volumes dedicados a diferentes finalidades.
-
----
-
-## OpenSSH
-
-O OpenSSH será o principal método de administração do servidor.
-
-```text
-Notebook/Desktop
-       │
-       │ SSH
-       ▼
-Raspberry Pi 5
-     OpenBSD
-```
-
-Ele será utilizado para:
-
-- administração;
-- configuração;
-- manutenção;
-- transferência segura de arquivos;
-- automação.
-
-Autenticação por chave será priorizada.
-
----
+- login só por chave; senha, keyboard-interactive e root bloqueados;
+- `AllowUsers matt`;
+- comandos privilegiados via `doas`;
+- a GUI existe para uso local eventual (`startx`), mas não sobe no boot.
 
 ## Compartilhamento de arquivos
 
-O protocolo definitivo ainda será escolhido.
-
-Possibilidades:
-
-### NFS
-
-Principal opção para máquinas Unix/Linux.
-
-```text
-OpenBSD NAS
-     │
-    NFS
-     │
-Linux / BSD
-```
-
-### Samba
-
-Poderá ser utilizado caso seja necessária compatibilidade SMB com Windows ou outros dispositivos.
-
-Os dois protocolos poderão coexistir caso necessário.
-
----
+- **Samba** como principal: atende Linux, Windows e celular. SMB3 mínimo, ligado só a `cad0`, sem acesso de convidado.
+- **NFS** opcional para clientes Linux. O `nfsd` do OpenBSD implementa NFSv2/v3, sem autenticação de usuário no protocolo, então a proteção depende de `/etc/exports` e do PF.
 
 ## Firewall
 
-O **PF** será utilizado para controlar quais serviços podem ser acessados pela rede.
-
-Conceito:
-
 ```text
 LAN
- │
- ├── SSH → permitido somente conforme política
- ├── NFS/SMB → rede local
- └── outros serviços → bloqueados por padrão
+ ├── SSH  → permitido só da rede local
+ ├── ping → permitido só da rede local
+ ├── SMB  → será permitido só da rede local
+ └── resto → bloqueado
 ```
 
-O NAS não será inicialmente exposto diretamente à Internet.
-
----
+O NAS não é exposto à Internet.
 
 ## Segurança
 
-Princípios iniciais:
-
-- nenhum serviço público desnecessário;
-- administração através de OpenSSH;
-- autenticação por chave;
-- serviços limitados à LAN;
-- PF habilitado;
-- princípio do menor privilégio;
-- atualizações regulares;
+- nenhum serviço público;
+- administração só por OpenSSH com chave;
+- serviços limitados à LAN pelo PF;
+- menor privilégio (`doas`, `AllowUsers`);
+- `syspatch` e `pkg_add -u` regulares;
 - backups independentes do armazenamento principal.
 
----
-
-## Armazenamento e redundância
-
-O projeto fará distinção entre:
+## Redundância ≠ backup
 
 ```text
-RAID / redundância
-         ≠
-       backup
+RAID1 (softraid) → protege contra falha de um disco
+backup           → protege contra apagamento, corrupção, roubo e falha do NAS
 ```
 
-Mesmo que futuramente seja utilizado espelhamento ou outro nível de softraid, dados importantes deverão possuir uma cópia independente.
-
----
+Dados importantes terão uma cópia fora do NAS. Destino a definir.
 
 ## Boot
 
-O método definitivo de boot será definido durante a etapa de instalação.
+Definido: o sistema inicia a partir do microSD no slot interno. Detalhes em [BOOT.md](BOOT.md).
 
-O armazenamento do sistema operacional e o armazenamento principal do NAS poderão ser separados.
-
-Exemplo:
+## Ordem de implementação
 
 ```text
-microSD
-└── OpenBSD
-
-SATA
-└── dados
+1. OpenBSD no Pi                     ✅
+2. OpenSSH, doas, PF                 ✅
+3. Upgrade 8.0 e ajustes 24/7        ✅
+4. Teste do hardware de armazenamento
+5. Discos (softraid RAID1)
+6. Compartilhamento (Samba)
+7. Monitoramento e backups
+8. Testes de aceitação
+9. Case definitiva / case 3D
 ```
 
-ou, caso os testes permitam:
-
-```text
-SATA
-├── OpenBSD
-└── dados
-```
-
----
-
-## Desenvolvimento do projeto
-
-A implementação será realizada em etapas:
-
-```text
-1. Hardware
-       ↓
-2. Teste do Radxa QF4
-       ↓
-3. OpenBSD
-       ↓
-4. OpenSSH
-       ↓
-5. Armazenamento
-       ↓
-6. Compartilhamento de rede
-       ↓
-7. PF / segurança
-       ↓
-8. Case 3D
-       ↓
-9. Operação 24/7
-```
-
-A prioridade será manter cada etapa funcional e compreensível antes de adicionar novos serviços.
+Cada etapa deve estar funcional e compreendida antes da próxima.
